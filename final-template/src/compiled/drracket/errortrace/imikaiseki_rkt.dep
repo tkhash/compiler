@@ -1,0 +1,1 @@
+("6.2.1" ("6765e8e22a1219616ba4982d93a05d2601320b80" . "95629760cca056a023f735bca372728479d01c7f") #"/Users/bospa/Desktop/src/syntax.rkt" #"/Users/bospa/Desktop/src/parser.rkt" (collects #"racket" #"runtime-config.rkt") (collects #"racket" #"main.rkt") #"/Users/bospa/Desktop/src/environment.rkt")

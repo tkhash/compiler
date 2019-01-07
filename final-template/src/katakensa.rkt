@@ -1,0 +1,428 @@
+#lang racket
+(require (prefix-in psr: "parser.rkt"))
+(require (prefix-in imi: "imikaiseki.rkt"))
+(require (prefix-in stx: "syntax.rkt"))
+(require parser-tools/lex
+         (prefix-in : parser-tools/lex-sre)
+         parser-tools/yacc)
+(require "environment.rkt")
+(provide (all-defined-out))
+
+(define (katakensa t)
+  (begin (map check-type (flatten t))
+         ))
+
+
+;戻り値'well-typed
+(define (check-type st)
+  (cond (#f '())
+        (else
+         (cond 
+           ((and (list? st) (equal? 1 (length st))) 
+            (check-type (car st))
+            ;(error (format "debug ~a" (car st)))                                       
+            )
+           ((stx:int-stmt? st) 
+            (let* ((decl-obj-list (stx:int-stmt-declist st)))
+              (map (lambda (x) 
+                     (cond 
+                       ((type_array? (obj-type x))
+                        (cond ((or (equal? 'void 
+                                           (type_array-type (obj-type x)))
+                                   (equal? (type_pointer 'pointer 'void) 
+                                           (type_array-type (obj-type x))))
+                               (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                       (position-line (obj-pos x))
+                                                       (position-col (obj-pos x))
+                                                       (obj-name x)))
+                                      (error (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                     (position-line (obj-pos x))
+                                                     (position-col (obj-pos x))
+                                                     (obj-name x)))))))
+                   
+                       (else (cond ((equal? (type_pointer 'pointer 'void) (obj-type x))
+                                    (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                            (position-line (obj-pos x))
+                                                            (position-col (obj-pos x))
+                                                            (obj-name x)))
+                                           (error (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                          (position-line (obj-pos x))
+                                                          (position-col (obj-pos x))
+                                                          (obj-name x)))))
+                                   ((equal? 'void (obj-type x))
+                                    (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                            (position-line (obj-pos x))
+                                                            (position-col (obj-pos x))
+                                                            (obj-name x)))
+                                           (error (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                          (position-line (obj-pos x))
+                                                          (position-col (obj-pos x))
+                                                          (obj-name x)))))
+                                   (else 'well-typed)))))
+                   decl-obj-list)
+              'well-typed))
+           ((stx:funpro-stmt? st) 
+            ;(eprintf (format "debug ~a" st))
+            (let* ((func-declarator (stx:funpro-stmt-tgt st))
+                   (func-para-list (stx:fundec-stmt-tgt func-declarator))
+                   (func-obj (stx:fundec-stmt-val func-declarator))
+                   (func-type (obj-type func-obj))
+                   (func-out-type (type_fun-out func-type)))
+          
+              (cond
+                ((equal? (type_pointer 'pointer 'void )
+                         func-out-type)
+                 (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                         (position-line (obj-pos func-obj))
+                                         (position-col (obj-pos func-obj))
+                                         (obj-name func-obj)))
+                        (error (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                         (position-line (obj-pos func-obj))
+                                         (position-col (obj-pos func-obj))
+                                         (obj-name func-obj)))))
+                ((equal? 'well-typed (check-type-para func-para-list))
+                 'well-typed)
+                (else 'well-typed))))                                  
+           ((stx:fundef-stmt? st) 
+            ;(eprintf (format "debug ~a" st))
+            (let* ((func-declarator (stx:fundef-stmt-tgt st))
+                   (func-para-list (stx:fundec-stmt-tgt func-declarator))
+                   (func-obj (stx:fundec-stmt-val func-declarator))
+                   (func-type (obj-type func-obj))
+                   (func-out-type (type_fun-out func-type))
+                   (func-cmpd-state (stx:cmpd-stmt-stmts
+                                         (stx:fundef-stmt-body st)))
+                   (func-cmpd-decl (stx:cmpd-stmt-decs 
+                                        (stx:fundef-stmt-body st))))
+              (cond ((and (equal? 'well-typed 
+                                  (cond ((equal? (type_pointer 'pointer 'void )
+                                                 func-out-type)
+                                         (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                                 (position-line (obj-pos func-obj))
+                                                                 (position-col (obj-pos func-obj))
+                                                                 (obj-name func-obj)))
+                                                (error (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                               (position-line (obj-pos func-obj))
+                                                               (position-col (obj-pos func-obj))
+                                                               (obj-name func-obj)))))
+                                        ((equal? 'well-typed (check-type-para func-para-list))
+                                         'well-typed)
+                                        (else 'well-typed)))
+                          (begin
+                            (cond ((equal? 'nodecl func-cmpd-decl) 'well-typed)
+                                  (else (map check-type (flatten func-cmpd-decl))))
+                            (cond ((equal? 'nostmt func-cmpd-state) 'well-typed)
+                                  (else (map check-type (flatten func-cmpd-state))))
+                            #t))
+                     'well-typed)
+                    (else (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                  (position-line (obj-pos func-obj))
+                                                  (position-col (obj-pos func-obj))
+                                                  (obj-name func-obj)))
+                                 (error (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                (position-line (obj-pos func-obj))
+                                                (position-col (obj-pos func-obj))
+                                                (obj-name func-obj))))))))
+           ((stx:expkakko-stmt? st) 
+            (check-type (stx:expkakko-stmt-stmt st)))
+           ((stx:exp-stmt? st)
+            (check-type (stx:exp-stmt-stmt st)))
+           ((stx:smret-stmt? st) 
+            (cond ((equal? (stx:smret-stmt-val st) 'noreturn) 
+                   'well-typed
+                   ;(eprintf (format "debug1"))
+                   )
+                  ((type-void? (stx:smret-stmt-val st))
+                   (begin (eprintf (format "sem error:~a,~a: return is not well typed\n"
+                                           (position-line (stx:smret-stmt-pos st))
+                                           (position-col (stx:smret-stmt-pos st))))
+                          (error  (format "sem error:~a,~a: return is not well typed\n"
+                                           (position-line (stx:smret-stmt-pos st))
+                                           (position-col (stx:smret-stmt-pos st))))))
+                  ((and (type-int? (stx:smret-stmt-val st))
+                        (equal? 'int 
+                                (type_fun-out (obj-type (stx:smret-stmt-tag st)))))
+                   'well-typed                   )
+                  ((and (type-intp? (stx:smret-stmt-val st))
+                        (equal? (type_pointer 'pointer 'int) 
+                                (type_fun-out (obj-type (stx:smret-stmt-tag st)))))
+                   'well-typed                   )
+                  ((and (type-intp? (stx:smret-stmt-val st))
+                        (equal? (type_pointer 'pointer 'int) 
+                                (type_fun-out (obj-type (stx:smret-stmt-tag st)))))
+                   'well-typed                   )
+                  (else (begin (eprintf (format "sem error:~a,~a: return is not well typed\n"
+                                           (position-line (stx:smret-stmt-pos st))
+                                           (position-col (stx:smret-stmt-pos st))))
+                          (error  (format "sem error:~a,~a: return is not well typed\n"
+                                           (position-line (stx:smret-stmt-pos st))
+                                           (position-col (stx:smret-stmt-pos st))))))))
+           ((stx:if-stmt? st)
+            (cond ((and (type-int? (stx:if-stmt-test st)) 
+                        (equal? 'well-typed (check-type (flatten (stx:if-stmt-tbody st))))
+                        (equal? 'well-typed (check-type (flatten (stx:if-stmt-ebody st)))))
+                   'well-typed)
+                  (else (begin (eprintf (format "sem error:~a,~a: if is not well typed\n"
+                                           (position-line (stx:if-stmt-pos st))
+                                           (position-col (stx:if-stmt-pos st))))
+                          (error  (format "sem error:~a,~a: if is not well typed\n"
+                                           (position-line (stx:if-stmt-pos st))
+                                           (position-col (stx:if-stmt-pos st))))))))
+           ((stx:while-stmt? st) 
+            (cond ((and (type-int? (stx:while-stmt-test st))
+                        (equal? 'well-typed (check-type (flatten (stx:while-stmt-body st)))))
+                   'well-typed)
+                  (else (begin (eprintf (format "sem error:~a,~a: while is not well typed\n"
+                                           (position-line (stx:while-stmt-pos st))
+                                           (position-col (stx:while-stmt-pos st))))
+                          (error  (format "sem error:~a,~a: while is not well typed\n"
+                                           (position-line (stx:while-stmt-pos st))
+                                           (position-col (stx:while-stmt-pos st))))))))
+           ((stx:cmpd-stmt? st) 
+            (begin 
+              (cond ((equal? 'nostmt (stx:cmpd-stmt-stmts st)) 'well-typed)
+                    (else (map check-type (flatten (list (stx:cmpd-stmt-stmts st))))))
+              (cond ((equal? 'nodecl (stx:cmpd-stmt-decs st)) 'well-typed)
+                    (else (map check-type (stx:cmpd-stmt-decs st))))
+              'well-typed))
+           (else (cond ((or (equal? 'int (type st))
+                            (equal? (type_pointer 'pointer 'int) (type st))
+                            (equal? (type_pointer 'pointer (type_pointer 'pointer 'int)) (type st))
+                            (equal? 'void (type st)))
+                          'well-typed)
+                       (else (begin (eprintf (format "error: ~a is not well typed\n" st))
+                                    (error (format "error: ~a is not well typed\n" st))))))))))
+
+(define (sametype? x y)
+  (equal? (type x) (type y)))
+(define (type-int? x) 
+  (equal? 'int (type x)))
+(define (type-intp? x)
+  (equal? (type_pointer 'pointer 'int) (type x)))
+(define (type-intpp? x)
+  (equal? (type_pointer 'pointer (type_pointer 'pointer 'int)) (type x)))
+(define (type-void? x)
+  (equal? 'void (type x)))  
+
+(define (check-type-para para-list) 
+  (cond ((equal? 'nopara para-list) 'well-typed)
+        (else (map (lambda (x) 
+                     (let ((x-type (obj-type x)))
+                       (begin (cond ((or (equal? 'void x-type)
+                                         (equal? (type_pointer 'pointer 'void) x-type))
+                                     (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                             (position-line (obj-pos x))
+                                                             (position-col (obj-pos x)) (obj-name x)))
+                                            (error (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                                           (position-line (obj-pos x))
+                                                           (position-col (obj-pos x)) (obj-name x)))))
+                                    (else 'well-typed))
+                              'well-typed)))
+                   para-list))))
+
+(define (type st)
+  (cond 
+    ((stx:smret-stmt? st) (type (stx:smret-stmt-val st)))
+    ((stx:expkakko-stmt? st) (type (stx:expkakko-stmt-stmt st)))
+    ((stx:assign-stmt? st) 
+     (let* ((type-var (type (stx:assign-stmt-var st)))
+            (type-src (type (stx:assign-stmt-src st)))
+            (meaningless
+             (if (stx:aop-exp? (stx:assign-stmt-var st))
+                 (begin (eprintf (format "sem error:~a,~a: '=' is not well typed\n"
+                                           (position-line (stx:assign-stmt-pos st))
+                                           (position-col (stx:assign-stmt-pos st))))
+                          (error (format "sem error:~a,~a: '=' is not well typed\n"
+                                           (position-line (stx:assign-stmt-pos st))
+                                           (position-col (stx:assign-stmt-pos st)))))
+                 '())))
+       (cond ((equal? type-var type-src) type-var)
+             (else (begin (eprintf (format "sem error:~a,~a: '=' is not well typed\n"
+                                           (position-line (stx:assign-stmt-pos st))
+                                           (position-col (stx:assign-stmt-pos st))))
+                          (error (format "sem error:~a,~a: '=' is not well typed\n"
+                                           (position-line (stx:assign-stmt-pos st))
+                                           (position-col (stx:assign-stmt-pos st)))))))))
+    ((stx:lop-exp? st) 
+     (let* ((type-left (stx:lop-exp-left st))
+            (type-right (stx:lop-exp-right st)))
+       (cond ((and (type-int? type-left) 
+                   (type-int? type-right))
+              'int)
+             (else (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                            (position-line (stx:lop-exp-pos st))
+                                            (position-col (stx:lop-exp-pos st))
+                                            (stx:lop-exp-op st)))
+                          (error (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                              (position-line (stx:lop-exp-pos st))
+                                              (position-col (stx:lop-exp-pos st))
+                                              (stx:lop-exp-op st)))
+                          )))))
+    ((stx:rop-exp? st) 
+     (let* ((type-left (type (stx:rop-exp-left st)))
+            (type-right (type (stx:rop-exp-right st))))
+       (cond ((equal? type-left type-right)
+              'int)
+             (else (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                           (position-line (stx:rop-exp-pos st))
+                                           (position-col (stx:rop-exp-pos st))
+                                           (stx:rop-exp-op st)))
+                          (error (format "sem error:~a,~a: '~a' is not well typed\n" 
+                                         (position-line (stx:rop-exp-pos st))
+                                         (position-col (stx:rop-exp-pos st))
+                                         (stx:rop-exp-op st)))
+                          )))))
+    ((stx:aop-exp? st) 
+     (let* ((type-left (stx:aop-exp-left st))
+            (type-right (stx:aop-exp-right st))
+            (op (stx:aop-exp-op st))
+            (pos (stx:aop-exp-pos st)))
+       (cond ((equal? '+ op) 
+              (cond ((and (type-int? type-left)
+                          (type-int? type-right))
+                     'int)
+                    ((and (type-intp? type-left)
+                          (type-int? type-right))
+                     (type_pointer 'pointer 'int))
+                    ((and (type-int? type-left)
+                          (type-intp? type-right))
+                     (type_pointer 'pointer 'int))
+                    ((and (type-intpp? type-left)
+                          (type-int? type-right))
+                     (type_pointer 'pointer (type_pointer 'pointer 'int)))
+                    ((and (type-int? type-left)
+                          (type-intpp? type-right))
+                     (type_pointer 'pointer (type_pointer 'pointer 'int)))
+                    (else (begin (eprintf (format "error:~a,~a: invalid operands int* and int*\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))
+                                 (error (format "error:~a,~a: invalid operands int* and int*\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))))))
+             ((equal? '- op) 
+              (cond ((and (type-int? type-left)
+                          (type-int? type-right)) 'int)
+                    ((and (type-intp? type-left)
+                          (type-int? type-right))
+                     (type_pointer 'pointer 'int))
+                    ((and (type-intpp? type-left)
+                          (type-int? type-right))
+                     (type_pointer 'pointer (type_pointer 'pointer 'int)))
+                   
+                    (else (begin (eprintf (format "error:~a,~a: invalid operand left int*\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))
+                                 (error (format "error:~a,~a: invalid operand left int*\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))))))
+             ((or (equal? '* op) 
+                  (equal? '/ op)) 
+              (cond ((and (type-int? type-left)
+                          (type-int? type-right))
+                     'int)
+                   (else (begin (eprintf (format "error:~a,~a: invalid operands int*\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))
+                                 (error (format "error:~a,~a: invalid operands int*\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))))))
+             ;;debag
+             (else (error "error!:~a" st)))))
+    ((stx:unary-stmt? st) 
+     (let* ((mark (stx:unary-stmt-mark st))
+            (stmt (stx:unary-stmt-stmt st))
+            (type-stmt (type stmt))
+            (pos (stx:unary-stmt-pos st)))
+       (cond ((equal? '& mark)
+              (cond ((obj? stmt)
+                     (cond ((equal? 'int (type stmt)) (type_pointer 'pointer 'int))
+                           (else (begin (eprintf (format "error:~a,~a: '&' only enabled int\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))
+                                 (error (format "error:~a,~a: '&' only enabed int\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))))))
+                    (else
+                     (cond ((equal? 'int stmt) (type_pointer 'pointer 'int))
+                           (else (begin (eprintf (format "error:~a,~a: '&' only enabled int\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))
+                                 (error (format "error:~a,~a: '&' only enabed int\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))))))))
+             ((equal? '* mark)
+              (cond ((equal? (type_pointer 'pointer 'int) type-stmt) 'int)
+                    ((equal? (type_pointer 'pointer (type_pointer 'pointer 'int)) type-stmt) 
+                     (type_pointer 'pointer 'int))
+                    (else (begin (eprintf (format "error:~a,~a: '*' only enabled int or int*\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))
+                                 (error (format "error:~a,~a: '*' only enabed int or int*\n"
+                                                  (position-line pos)
+                                                  (position-col pos)))))))
+             ;;debag
+             (else (error "error! ~a" st)))))
+    ((stx:lit-exp? st) 'int)
+    ((stx:kakko-exp? st) 
+     (let* ((funref (stx:kakko-exp-tgt st))
+            (func-type (obj-type funref))
+            (func-in-list (type_fun-in func-type))
+            (func-out (type_fun-out func-type))
+            (func-para (stx:kakko-exp-para st))
+            (pos (obj-pos funref))
+            (func-name (obj-name funref)))
+       (cond ((equal? (map (lambda (x) 
+                             (cond 
+                               ((equal? 'nopara x) 'nopara)
+                               (else (type x))))
+                           (flatten (list func-para)))
+                      (flatten (list func-in-list)))
+              (cond 
+                ((equal? 'int func-out) 'int)
+                ((equal? 'void func-out) 'void)
+                ((equal? (type_pointer 'pointer 'int) func-out) (type_pointer 'pointer 'int))
+                (else (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n"
+                                              (position-line pos) (position-col pos) func-name))
+                             (error (format "sem error:~a,~a: '~a' is not well typed\n"
+                                            (position-line pos) (position-col pos) func-name))))))
+             (else (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n"
+                                           (position-line pos) (position-col pos) func-name))
+                          (error (format "sem error:~a,~a: '~a' is not well typed\n"
+                                         (position-line pos) (position-col pos) func-name)))))))
+    ((obj? st) 
+     (let* ((type-obj (obj-type st)))
+       (cond 
+         ((type_array? type-obj) 
+          (cond
+            ((equal? 'int (type_array-type type-obj)) (type_pointer 'pointer 'int))
+            (else (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n"
+                                          (position-line (obj-pos st))
+                                          (position-col (obj-pos st))
+                                          (obj-name st)))
+                         (error (format "sem error:~a,~a: '~a' is not well typed\n"
+                                        (position-line (obj-pos st))
+                                        (position-col (obj-pos st))
+                                        (obj-name st)))))))
+        
+         (else 
+          (cond ((equal? 'int type-obj) 'int)
+                ((equal? (type_pointer 'pointer 'int) type-obj) (type_pointer 'pointer 'int))
+                (else (begin (eprintf (format "sem error:~a,~a: '~a' is not well typed\n"
+                                              (position-line (obj-pos st))
+                                              (position-col (obj-pos st))
+                                              (obj-name st)))
+                             (error (format "sem error:~a,~a: '~a' is not well typed\n"
+                                            (position-line (obj-pos st))
+                                            (position-col (obj-pos st))
+                                            (obj-name st))))))))))   
+  
+    (else (error (format "error! ~a" st)))))
+
+
+(define az (katakensa imi:ay))
+(define bz (katakensa imi:by))
+(define cz (katakensa imi:cy))
+(define dz (katakensa imi:dy))
+
+
+(define (main fname) (katakensa (imi:sem-analyze-tree (psr:parse-file fname))))

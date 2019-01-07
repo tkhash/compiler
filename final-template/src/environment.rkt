@@ -1,0 +1,297 @@
+#lang racket
+(require (prefix-in stx: "syntax.rkt"))
+(provide (all-defined-out))
+(require parser-tools/lex
+         (prefix-in : parser-tools/lex-sre)
+         parser-tools/yacc)
+
+
+(struct type_pointer (pointer type) #:transparent)
+(struct type_array (type size) #:transparent)
+
+(struct type_fun (fun out in) #:transparent)
+
+(struct para_flag (out-type para))
+
+(struct fundef_flag (out-type para))
+
+(struct comp_flag (decl stmt))
+
+
+
+(struct obj (name lev kind type pos)#:transparent)
+(define initial-env '())
+
+(define (lookup-env env x)
+  (if (equal? x initial-env) 
+      #f
+      (if (equal? (obj-name (car x)) env)
+          (car x)
+          (lookup-env env (cdr x)))))
+
+
+(define (in-env? env x)
+  (if (equal? x initial-env) 
+      #f
+      (if (equal? (obj-name (car x)) env)
+          #t
+          (in-env? env (cdr x)))))
+
+(define (extend-env x e)
+  (cons x e))
+
+(define (add-list l e)
+  (if (null? l) 
+      e
+      (let* ((newenv (extend-env (car l) e)))
+        (add-list (cdr l) newenv))))
+
+(define (check-decl obj env)
+  (cond ((or (equal? 'nopara env) (equal? 'nodecl env)) #t)
+        (else
+         (map
+          (lambda (x)
+            (cond 
+                  ((and (equal? (obj-name x) (obj-name obj))
+                        (or (equal? 'fun (obj-kind x))
+                            (equal? 'proto (obj-kind x)))
+                        (equal? 0 (obj-lev obj)))
+                   (begin
+                     (eprintf (format "error:~a,~a: '~a' is already defined\n" 
+                                      (position-line (obj-pos obj))
+                                      (position-col (obj-pos obj))
+                                      (obj-name obj)))
+                     (error (format "error:~a,~a: '~a' is already defined\n" 
+                                    (position-line (obj-pos obj))
+                                    (position-col (obj-pos obj))
+                                    (obj-name obj)))))
+                  ((and (equal? (obj-name x) (obj-name obj))
+                        (equal? 'var (obj-kind x))
+                        (equal? (obj-lev x) (obj-lev obj)))
+                   (begin (eprintf (format
+                                    "error:~a,~a: '~a' is already defined\n"  
+                                           (position-line (obj-pos obj))
+                                           (position-col (obj-pos obj))
+                                           (obj-name obj)))
+                          (error (format
+                                  "error:~a,~a: '~a' is already defined\n"  
+                                         (position-line (obj-pos obj))
+                                         (position-col (obj-pos obj))
+                                         (obj-name obj)))))
+                  ((and (equal? (obj-name x) (obj-name obj))
+                        (equal? 'parm (obj-kind x)))
+                   (begin
+                     (display 
+                      (format "warning:~a,~a: '~a' is the same name!\n"
+                              (position-line (obj-pos obj))
+                              (position-col (obj-pos obj))
+                              (obj-name obj)))
+                     #t))))
+          env))))
+
+
+(define (check-proto-para obj-list)
+  (cond 
+    ((null? obj-list) #t)
+    ((equal? 'nopara obj-list) #t)
+    ((in-env? (obj-name (car obj-list)) (cdr obj-list))
+     (begin (eprintf (format "error!:~a,~a: '~a' is function prototype\n" 
+                             (position-line (obj-pos (car obj-list)))
+                             (position-col (obj-pos (car obj-list)))
+                             (obj-name (car obj-list))))
+            (error (format "error!:~a,~a: '~a' is function prototype\n" 
+                           (position-line (obj-pos (car obj-list)))
+                           (position-col (obj-pos (car obj-list)))
+                           (obj-name (car obj-list))))))
+    (else (check-proto-para (cdr obj-list)))))
+
+(define (check-def-para obj-list)
+  (cond 
+    ((null? obj-list) #t)
+    ((equal? 'nopara obj-list) #t)
+    ((in-env? (obj-name (car obj-list)) (cdr obj-list))
+     (begin (eprintf (format "error!:~a,~a: '~a' is function definition\n" 
+                             (position-line (obj-pos (car obj-list)))
+                             (position-col (obj-pos (car obj-list)))
+                             (obj-name (car obj-list))))
+            (error (format "error!:~a,~a: '~a' is function definition\n" 
+                           (position-line (obj-pos (car obj-list)))
+                           (position-col (obj-pos (car obj-list)))
+                           (obj-name (car obj-list))))))
+    (else (check-proto-para (cdr obj-list)))))
+
+(define (check-proto obj env)
+  (map 
+   (lambda (x)
+     (cond ((and (equal? (obj-name x) (obj-name obj))
+                 (equal? 0 (obj-lev x))
+                 (not (equal? (obj-type x) (obj-type obj))))
+           (begin (eprintf (format
+                                    "error:~a,~a: '~a' is already defined prototype\n"  
+                                           (position-line (obj-pos obj))
+                                           (position-col (obj-pos obj))
+                                           (obj-name obj)))
+                          (error (format
+                                  "error:~a,~a: '~a' is already defined prototype\n"  
+                                         (position-line (obj-pos obj))
+                                         (position-col (obj-pos obj))
+                                         (obj-name obj)))))
+           (else  #t)))
+   env))
+
+(define (check-func obj env)
+  (map 
+   (lambda (x)
+     (cond ((and (equal? (obj-name x) (obj-name obj))
+                 (equal? (obj-lev x) (obj-lev obj))
+                 (or (equal? 'fun (obj-kind x))
+                     (equal? 'var (obj-kind x))))
+            (begin (eprintf (format
+                                    "error:~a,~a: '~a' is already defined\n"  
+                                           (position-line (obj-pos obj))
+                                           (position-col (obj-pos obj))
+                                           (obj-name obj)))
+                          (error (format
+                                  "error:~a,~a: '~a' is already defined\n"  
+                                         (position-line (obj-pos obj))
+                                         (position-col (obj-pos obj))
+                                         (obj-name obj)))))
+           ((and (equal? (obj-name x) (obj-name obj))
+                 (equal? 'proto (obj-kind x))
+                 (not (equal? (obj-type x) (obj-type obj))))
+            (begin
+              (eprintf (format
+                        "error:~a,~a: parameter of '~a' is diferrent from prototype\n" 
+                        (position-line (obj-pos obj))
+                        (position-col (obj-pos obj))
+                        (obj-name obj)))
+              (error (format
+                        "error:~a,~a: parameter of '~a' is diferrent from prototype\n" 
+                      (position-line (obj-pos obj))
+                      (position-col (obj-pos obj))
+                      (obj-name obj)))))
+           (else  #t)))
+   env))  
+
+(define (check-var-ref st lev env)
+  (let* ((name (cond ((stx:var-exp? st) (stx:var-exp-tgt st))
+                     ((stx:varpoint-exp? st) (stx:varpoint-exp-tgt st))
+                     ((stx:arrvar-exp? st) 
+                      (cond ((stx:var-exp? (stx:arrvar-exp-tgt st))
+                             (stx:var-exp-tgt (stx:arrvar-exp-tgt st)))
+                            (else (stx:arrvar-exp-tgt st))))))
+         (pos (cond ((stx:var-exp? st) (stx:var-exp-pos st))
+                    ((stx:varpoint-exp? st) (stx:varpoint-exp-pos st))
+                    ((stx:arrvar-exp? st) (stx:arrvar-exp-pos st))))
+         (array-or-not (cond ((stx:var-exp? st) 'n)
+                             ((stx:varpoint-exp? st) 'n)
+                             ((stx:arrvar-exp? st) 'y)))
+         
+         (same-name-list 
+          (cond
+            ((null? env) 
+             (begin
+               (eprintf (format "error:~a,~a: '~a' is undefined\n"
+                                (position-line pos) (position-col pos) name))
+               (error (eprintf (format "error:~a,~a: '~a' is undefined\n"
+                                (position-line pos) (position-col pos) name)))))
+            (else (flatten
+                   (map 
+                    (lambda (x) (cond ((equal? name (obj-name x)) x) (else '())))
+                    env)))))
+         (correct-var-obj
+          (cond 
+            ((null? same-name-list) 
+             (begin
+               (eprintf (format "error:~a,~a: '~a' is undefined\n"
+                                (position-line pos) (position-col pos) name))
+               (error (eprintf (format "error:~a,~a: '~a' is undefined\n"
+                                (position-line pos) (position-col pos) name)))))
+            (else (flatten (map (lambda(x) 
+                                  (cond ((and (equal? name (obj-name x))
+                                              (or (equal? 'var (obj-kind x))
+                                                  (equal? 'parm (obj-kind x))))
+                                         x)
+                                        ((and (equal? name (obj-name x))
+                                              (equal? 'func (obj-kind x)))
+                                         '())
+                                        (else'())))
+                                env))))))
+    (cond ((null? correct-var-obj)
+           (begin
+               (eprintf (format "error:~a,~a: '~a' is undefined\n"
+                                (position-line pos) (position-col pos) name))
+               (error (eprintf (format "error:~a,~a: '~a' is undefined\n"
+                                (position-line pos) (position-col pos) name)))))
+          (else (cond ((equal? 'n array-or-not)
+                       (find-correct-var correct-var-obj lev))
+                      ((equal? 'y array-or-not)
+                       (let* ((num (stx:arrvar-exp-num st))
+                              (ref-obj (find-correct-var correct-var-obj lev))
+                              (name (obj-name ref-obj))
+                              (lev (obj-lev ref-obj))
+                              (kind (obj-kind ref-obj))
+                              (pos (obj-pos ref-obj)))
+                         (obj name lev kind (type_array 'int num) pos))))))))
+
+
+(define (find-correct-var ls lev)
+  (cond 
+    ((and (equal? 0 lev) (<= 2 (length ls)))
+     (begin
+       (eprintf (format "error: ~a ~a" ls lev))
+       (error (format "error: ~a ~a" ls lev))))
+    ((and (equal? 0 lev) (equal? 1 (length ls))) (car ls))
+    (else (cond
+            ((null? 
+                     (flatten (map (lambda (x)
+                                     (cond ((equal? lev (obj-lev x)) x)
+                                           (else '())))
+                                   ls)))
+             (find-correct-var ls (- lev 1)))
+            (else (car (flatten (map (lambda (x)
+                                       (cond ((equal? lev (obj-lev x)) x)
+                                             (else '())))
+                                     ls))))))))
+
+                                     
+(define (check-func-ref st lev env)
+  (let* ((name (stx:kakko-exp-tgt st))
+         (referred-obj 
+          (lookup-env
+           name 
+           (map
+            (lambda (x)
+              (if (in-env? name env)
+                  (cond ((and (equal? name (obj-name x))
+                              (or (equal? 'fun (obj-kind x))
+                                  (equal? 'proto (obj-kind x))))
+                         x)
+                        ((and (equal? name (obj-name x))
+                              (equal? 'var (obj-kind x))) 
+                         (begin
+               (eprintf (format "error: '~a' is undefined\n" name))
+               (error (eprintf (format "error: '~a' is undefined\n" name)))))
+                        (else
+                         (obj 'invalid 'invalid 'invalid 'invalid 'invalid)))
+                  (begin
+               (eprintf (format "error: '~a' is undefined\n" name))
+               (error (eprintf (format "error: '~a' is undefined\n" name))))))
+            env))))
+    (if (equal? 'invalid (obj-type referred-obj))
+        (begin
+               (eprintf (format "error: '~a' is invalid\n" name))
+               (error (eprintf (format "error: '~a' is invalid\n" name))))
+        referred-obj)))
+
+(define (check-comp-env comp-env)
+  (cond ((equal? 'nodecl comp-env)
+         #t)
+        ((equal? '() (cdr comp-env)) 
+         #t)
+        (else
+         (cond ((in-env? (obj-name (car comp-env)) (cdr comp-env))
+                (begin (eprintf (format "error: ~a" (obj-name (car comp-env))))
+                       (error (format "error: ~a" (obj-name (car comp-env))))))
+               (else (check-comp-env (cdr comp-env)))))))
+

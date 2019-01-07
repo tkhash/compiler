@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# SCC_OPTIONを自分のつくったSmall Cコンパイラの使用方法に沿うよう
+# 修正すること
+#     -s spimコマンドのパス(動作確認時には適当に置き換えるので，
+#        自分の使用しているマシン上のパスを設定しておけばよい)
+#     -r Racketでつくったコンパイラの
+#        <メインモジュール(ファイル)名>:<メイン関数名>
+#        (モジュール名は相対パス)
+#     -c 他言語でつくったコンパイラを起動するコマンドの(普通は相対)パス
+# その他，各種オプションの使い方については実験資料の付録Bを参照
+
+# Racketの場合の例
+SCC_OPTION='-s /usr/local/bin/spim -r src/compiler:compile'
+
+# 他言語の場合の例
+#SCC_OPTION='-s /usr/local/bin/spim -c src/comp'
+
+
+src/scc -e ${SCC_OPTION} $*
